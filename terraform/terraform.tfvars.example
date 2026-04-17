@@ -1,0 +1,20 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is gitignored - never commit real secrets
+
+aws_region      = "eu-west-1"
+project_name    = "afripay"
+environment     = "production"
+
+db_instance_class = "db.t3.micro"
+db_allocated_storage = 20
+db_name           = "afripay"
+db_username       = "afripay_admin"
+
+backup_retention_days = 7
+multi_az              = false
+
+desired_task_count = 2
+max_task_count     = 10
+
+app_cpu    = 256
+app_memory = 512
