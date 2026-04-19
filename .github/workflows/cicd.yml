@@ -347,7 +347,6 @@ jobs:
 # ============================================
 # Sends deployment status to Slack
 # ============================================
-
   notify:
     name: 📢 Send Notifications
     runs-on: ubuntu-latest
@@ -356,30 +355,28 @@ jobs:
     
     steps:
       - name: Determine deployment status
+        id: status
         run: |
           if [ "${{ needs.verify-health.result }}" == "success" ]; then
-            STATUS="✅ SUCCESS - Deployment completed successfully"
-            COLOR="good"
+            echo "STATUS=✅ SUCCESS - Deployment completed successfully" >> $GITHUB_OUTPUT
+            echo "COLOR=good" >> $GITHUB_OUTPUT
           elif [ "${{ needs.rollback.result }}" == "success" ]; then
-            STATUS="⚠️ ROLLBACK - Deployment failed, rollback successful"
-            COLOR="warning"
+            echo "STATUS=⚠️ ROLLBACK - Deployment failed, rollback successful" >> $GITHUB_OUTPUT
+            echo "COLOR=warning" >> $GITHUB_OUTPUT
           else
-            STATUS="❌ FAILED - Deployment failed"
-            COLOR="danger"
+            echo "STATUS=❌ FAILED - Deployment failed" >> $GITHUB_OUTPUT
+            echo "COLOR=danger" >> $GITHUB_OUTPUT
           fi
-          echo "STATUS=$STATUS" >> $GITHUB_ENV
-          echo "COLOR=$COLOR" >> $GITHUB_ENV
       
       - name: Send Slack notification
-        if: secrets.SLACK_WEBHOOK_URL != ''
         uses: slackapi/slack-github-action@v1.25
         with:
           payload: |
             {
               "text": "AfriPay Deployment",
               "attachments": [{
-                "color": "${{ env.COLOR }}",
-                "title": "${{ env.STATUS }}",
+                "color": "${{ steps.status.outputs.COLOR }}",
+                "title": "${{ steps.status.outputs.STATUS }}",
                 "fields": [
                   { "title": "Environment", "value": "Production", "short": true },
                   { "title": "Commit", "value": "${{ github.sha }}", "short": true },
@@ -389,12 +386,12 @@ jobs:
               }]
             }
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
       
-      - name: Print status (if no Slack)
-        if: secrets.SLACK_WEBHOOK_URL == ''
+      - name: Print status
         run: |
           echo "=========================================="
-          echo "DEPLOYMENT STATUS: ${{ env.STATUS }}"
+          echo "DEPLOYMENT STATUS: ${{ steps.status.outputs.STATUS }}"
           echo "=========================================="
           echo "Commit: ${{ github.sha }}"
           echo "Branch: ${{ github.ref_name }}"
