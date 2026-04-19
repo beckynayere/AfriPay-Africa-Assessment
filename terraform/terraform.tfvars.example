@@ -1,20 +1,34 @@
-# Copy this file to terraform.tfvars and fill in your values
-# terraform.tfvars is gitignored - never commit real secrets
+# ============================================
+# AFRIPAY TERRAFORM CONFIGURATION
+# ============================================
+# Copy this file to terraform.tfvars and update values
+# terraform.tfvars is gitignored - never commit real secrets!
+# ============================================
 
-aws_region      = "eu-west-1"
-project_name    = "afripay"
-environment     = "production"
+# AWS Region (closest to Africa)
+aws_region = "eu-west-1"
 
-db_instance_class = "db.t3.micro"
-db_allocated_storage = 20
-db_name           = "afripay"
-db_username       = "afripay_admin"
+# Project Configuration
+project_name = "afripay"
+environment  = "production"
 
+# Network Configuration
+az_count = 2
+
+# Database Configuration
+db_instance_class     = "db.t3.micro"
+db_allocated_storage  = 20
+db_name              = "afripay"
+db_username          = "afripay_admin"
 backup_retention_days = 7
-multi_az              = false
+multi_az             = false
+skip_final_snapshot  = false
 
+# ECS Configuration
+app_cpu            = 256
+app_memory         = 512
 desired_task_count = 2
 max_task_count     = 10
 
-app_cpu    = 256
-app_memory = 512
+# Monitoring
+log_retention_days = 30

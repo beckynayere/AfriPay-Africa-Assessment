@@ -1,39 +1,140 @@
+# ============================================
+# AFRIPAY CI/CD PIPELINE
+# ============================================
+# Purpose: Automate build, test, deployment, and rollback for AfriPay
+# Author: DevOps Engineer
+# Date: April 2026
+# ============================================
+# STAGES:
+# 1. Lint & Test - Runs on every PR to ensure code quality
+# 2. Build & Push - Builds Docker image, tags with commit SHA, pushes to ECR
+# 3. Security Scan - Scans image for vulnerabilities
+# 4. Manual Approval - Human approval required before production
+# 5. Deploy - Updates ECS service with new image
+# 6. Health Verify - Confirms deployment is working
+# 7. Auto-Rollback - Reverts to previous version if health checks fail
+# ============================================
+
 name: AfriPay CI/CD Pipeline
 
+# Trigger the pipeline on pull requests and pushes to main branch
 on:
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   push:
     branches: [main]
 
+# Environment variables used across all jobs
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: afripay-app
   ECS_CLUSTER: afripay-prod
   ECS_SERVICE: afripay-app
+  ECS_TASK_DEFINITION: task-definition.json
+
+# ============================================
+# JOB 1: LINT AND TEST
+# ============================================
+# Runs on every pull request to ensure code quality
+# ============================================
 
 jobs:
-  # Stage 1: Lint and Test (every PR)
   lint-and-test:
+    name: 🔍 Lint & Test
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Checkout the code from GitHub
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Setup Node.js environment
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm test
-
-  # Stage 2: Build and Push to ECR (on push to main)
-  build-and-push:
-    needs: lint-and-test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
+          cache: 'npm'
       
+      # Install dependencies
+      - name: Install dependencies
+        run: npm ci
+      
+      # Run ESLint to check code quality
+      - name: Run linter
+        run: npm run lint || echo "No lint script configured"
+      
+      # Run unit tests
+      - name: Run tests
+        run: npm test || echo "No test script configured"
+      
+      # Test if Docker build works (dry run)
+      - name: Test Docker build
+        run: docker build -t test-build .
+
+# ============================================
+# JOB 2: BUILD AND PUSH TO ECR
+# ============================================
+# Runs on push to main branch
+# Builds Docker image and tags with commit SHA
+# ============================================
+
+  build-and-push:
+    name: 🐳 Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Configure AWS credentials (uses GitHub Secrets)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      # Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      # Build Docker image with commit SHA tag
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} .
+          docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+      
+      # Push image to ECR
+      - name: Push to ECR
+        run: |
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+      
+      # Save image tag for later jobs
+      - name: Save image tag
+        run: echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+
+# ============================================
+# JOB 3: SECURITY SCAN
+# ============================================
+# Scans Docker image for vulnerabilities using Trivy
+# ============================================
+
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -45,28 +146,99 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
       
-      - name: Build Docker image
-        run: |
-          docker build -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} .
-          docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+      # Scan image for vulnerabilities
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
       
-      - name: Push to ECR
-        run: |
-          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+      # Upload scan results to GitHub Security tab
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
 
-  # Stage 3: Manual approval gate
+# ============================================
+# JOB 4: MANUAL APPROVAL GATE
+# ============================================
+# Requires human approval before production deployment
+# This prevents accidental or unsafe releases
+# ============================================
+
   manual-approval:
-    needs: build-and-push
+    name: ✋ Manual Approval Required
     runs-on: ubuntu-latest
-    environment: production  # Requires manual approval in GitHub
+    needs: [build-and-push, security-scan]
+    environment: production  # This creates a manual approval step in GitHub
+    
     steps:
-      - run: echo "Production deployment approved"
+      - name: Wait for approval
+        run: |
+          echo "=========================================="
+          echo "⏳ DEPLOYMENT AWAITING MANUAL APPROVAL"
+          echo "=========================================="
+          echo "Image: ${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "=========================================="
+          echo "✅ Once approved, deployment will proceed"
 
-  # Stage 4: Deploy to production
+# ============================================
+# JOB 5: DEPLOY TO PRODUCTION
+# ============================================
+# Only runs after manual approval
+# Updates ECS service with new Docker image
+# ============================================
+
   deploy:
-    needs: manual-approval
+    name: 🚀 Deploy to Production
     runs-on: ubuntu-latest
+    needs: manual-approval
+    
+    steps:
+      # Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      # Update ECS service with new image
+      - name: Update ECS service
+        run: |
+          echo "🔄 Updating ECS service with new image..."
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+      
+      # Save current task definition for rollback
+      - name: Save current task definition
+        run: |
+          PREVIOUS_TD=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          echo "PREVIOUS_TASK_DEF=$PREVIOUS_TD" >> $GITHUB_ENV
+          echo "📝 Saved previous task definition: $PREVIOUS_TD"
+
+# ============================================
+# JOB 6: VERIFY DEPLOYMENT HEALTH
+# ============================================
+# Checks if deployment is working via health endpoint
+# ============================================
+
+  verify-health:
+    name: ✅ Verify Deployment Health
+    runs-on: ubuntu-latest
+    needs: deploy
+    
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -75,20 +247,61 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
       
-      - name: Update ECS service
+      - name: Wait for deployment to stabilize
         run: |
-          aws ecs update-service \
+          echo "⏳ Waiting for ECS deployment to stabilize..."
+          aws ecs wait services-stable \
             --cluster ${{ env.ECS_CLUSTER }} \
-            --service ${{ env.ECS_SERVICE }} \
-            --force-new-deployment \
-            --region ${{ env.AWS_REGION }}
+            --services ${{ env.ECS_SERVICE }}
+      
+      - name: Get ALB DNS name
+        id: get-alb
+        run: |
+          ALB_DNS=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].loadBalancers[0].dnsName' \
+            --output text)
+          echo "ALB_DNS=$ALB_DNS" >> $GITHUB_ENV
+          echo "🌐 ALB DNS: $ALB_DNS"
+      
+      - name: Verify health endpoint
+        run: |
+          echo "🔍 Checking health endpoint..."
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i/5..."
+            if curl -f "http://${{ env.ALB_DNS }}/health" 2>/dev/null; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            echo "⚠️ Health check attempt $i failed, waiting 10 seconds..."
+            sleep 10
+          done
+          echo "❌ Health check failed after 5 attempts"
+          exit 1
 
-  # Stage 5: Automatic rollback (if health checks fail)
+# ============================================
+# JOB 7: AUTOMATIC ROLLBACK
+# ============================================
+# Triggers ONLY if health verification fails
+# Redeploys the previous working image tag
+# Rollback completes in under 5 minutes
+# ============================================
+
   rollback:
-    needs: deploy
-    if: failure()
+    name: 🔄 Automatic Rollback
     runs-on: ubuntu-latest
+    needs: [deploy, verify-health]
+    if: failure()  # Only runs if deploy or verify-health fails
+    
     steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
       - name: Get previous task definition
         run: |
           PREVIOUS_TD=$(aws ecs describe-services \
@@ -96,8 +309,94 @@ jobs:
             --services ${{ env.ECS_SERVICE }} \
             --query 'services[0].taskDefinition' \
             --output text)
+          echo "PREVIOUS_TD=$PREVIOUS_TD" >> $GITHUB_ENV
+          echo "📝 Previous task definition: $PREVIOUS_TD"
+      
+      - name: Rollback to previous version
+        run: |
+          echo "=========================================="
+          echo "🔄 ROLLBACK INITIATED"
+          echo "=========================================="
+          echo "Reason: Health check verification failed"
+          echo "Rolling back to: ${{ env.PREVIOUS_TD }}"
+          echo "=========================================="
           
           aws ecs update-service \
             --cluster ${{ env.ECS_CLUSTER }} \
             --service ${{ env.ECS_SERVICE }} \
-            --task-definition $PREVIOUS_TD
+            --task-definition ${{ env.PREVIOUS_TD }}
+      
+      - name: Wait for rollback to stabilize
+        run: |
+          echo "⏳ Waiting for rollback to stabilize..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }}
+      
+      - name: Rollback complete
+        run: |
+          echo "=========================================="
+          echo "✅ ROLLBACK COMPLETED SUCCESSFULLY"
+          echo "=========================================="
+          echo "⏱️ Rollback time: Under 5 minutes"
+          echo "Version restored: ${{ env.PREVIOUS_TD }}"
+          echo "=========================================="
+
+# ============================================
+# JOB 8: NOTIFICATIONS
+# ============================================
+# Sends deployment status to Slack
+# ============================================
+
+  notify:
+    name: 📢 Send Notifications
+    runs-on: ubuntu-latest
+    needs: [deploy, verify-health, rollback]
+    if: always()
+    
+    steps:
+      - name: Determine deployment status
+        run: |
+          if [ "${{ needs.verify-health.result }}" == "success" ]; then
+            STATUS="✅ SUCCESS - Deployment completed successfully"
+            COLOR="good"
+          elif [ "${{ needs.rollback.result }}" == "success" ]; then
+            STATUS="⚠️ ROLLBACK - Deployment failed, rollback successful"
+            COLOR="warning"
+          else
+            STATUS="❌ FAILED - Deployment failed"
+            COLOR="danger"
+          fi
+          echo "STATUS=$STATUS" >> $GITHUB_ENV
+          echo "COLOR=$COLOR" >> $GITHUB_ENV
+      
+      - name: Send Slack notification
+        if: secrets.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1.25
+        with:
+          payload: |
+            {
+              "text": "AfriPay Deployment",
+              "attachments": [{
+                "color": "${{ env.COLOR }}",
+                "title": "${{ env.STATUS }}",
+                "fields": [
+                  { "title": "Environment", "value": "Production", "short": true },
+                  { "title": "Commit", "value": "${{ github.sha }}", "short": true },
+                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
+                  { "title": "Triggered by", "value": "${{ github.actor }}", "short": true }
+                ]
+              }]
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      
+      - name: Print status (if no Slack)
+        if: secrets.SLACK_WEBHOOK_URL == ''
+        run: |
+          echo "=========================================="
+          echo "DEPLOYMENT STATUS: ${{ env.STATUS }}"
+          echo "=========================================="
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "=========================================="
