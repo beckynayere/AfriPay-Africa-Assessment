@@ -2,7 +2,7 @@
 ## M-PESA Africa - DevOps Engineer Case Study
 
 **Candidate:** Rebecca Nayere
-**Date:** April 16, 2026
+**Date:** April 18, 2026
 **Markets:** Kenya, Tanzania, Lesotho, Ethiopia, Mozambique, DRC
 
 ---
@@ -31,6 +31,8 @@ AfriPay faces critical challenges: manual deployments causing outages, plaintext
 - Other markets (low traffic): 1-5 tasks
 
 **Handles unreliable internet:** ArgoCD works offline for up to 72 hours
+**If internet is down longer:** Each market keeps a local cache of the last 3 working images.
+Manual rollback via USB drive if needed (emergency only).
 
 ---
 
@@ -120,6 +122,9 @@ AfriPay faces critical challenges: manual deployments causing outages, plaintext
 - Alert if: Above 80% (warning), above 90% (critical)
 - Why it matters: Tells you BEFORE a crash happens (2-5 minutes warning)
 
+**USSD-specific note:** Unlike mobile apps, USSD has no retry logic.
+If a transaction fails, the user must restart from the beginning.
+This makes our 95% completion rate target critical.
 ---
 
 ## Q7: Kenya peak load (salary dates 25th-31st)
@@ -127,6 +132,7 @@ AfriPay faces critical challenges: manual deployments causing outages, plaintext
 **Problem:** On salary dates, servers struggle and response times get very slow.
 
 **Solution:** Three layers of protection
+
 
 **Layer 1: Auto-scaling**
 - Normal days: 2-10 servers
@@ -145,6 +151,12 @@ AfriPay faces critical challenges: manual deployments causing outages, plaintext
 **Expected improvement:**
 - Response time: 15+ seconds → less than 3 seconds
 - Database CPU: 95% → 45%
+
+**Cost impact of scaling:**
+- Normal day: ~$50/day for Kenya
+- Salary date: ~$120/day (5x traffic, 2.4x cost)
+- Additional $70/day for 7 days = $490/month extra
+- Worth it to prevent customer complaints and lost transactions
 
 ---
 
