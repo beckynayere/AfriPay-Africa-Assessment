@@ -28,10 +28,10 @@ docker-compose up -d
 docker-compose ps
 
 # Test the API
-curl http://localhost/health
-curl http://localhost/live
-curl http://localhost/metrics
-
+curl http://localhost:8080/
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+curl http://localhost:8080/metrics
 # View logs
 docker-compose logs -f app
 docker-compose logs -f postgres
@@ -44,7 +44,7 @@ docker-compose down
 docker-compose down -v
 ```
 
-### Health Check Endpoints
+<!-- ### Health Check Endpoints
 
 - **GET /live** - Liveness probe (is the service running?)
   - Returns 200 if service is alive
@@ -58,8 +58,29 @@ docker-compose down -v
 - **GET /metrics** - Application metrics
   - Transaction count
   - Memory usage
-  - Uptime
+  - Uptime -->
+### Health Check Endpoints
 
+| Endpoint | Method | Purpose | Example Response |
+|----------|--------|---------|------------------|
+| `GET /` | Root | Service information and available endpoints | `{"service":"AfriPay Health API","version":"1.0.0"}` |
+| `GET /health` | Deep health check | Checks database connectivity and returns detailed status | `{"status":"healthy","database":"connected"}` |
+| `GET /ready` | Readiness probe | Used by load balancers to know if app can receive traffic | `{"status":"ready"}` |
+| `GET /metrics` | Prometheus metrics | Application metrics for monitoring systems | Text format with `afripay_health_check` etc. |
+| `POST /api/v1/payment` | Business endpoint | Mock payment processing (amount + phone required) | `{"transaction_id":"TXN...","status":"success"}` |
+
+**Quick test commands:**
+```bash
+# Test after starting docker-compose up -d
+curl http://localhost:8080/
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+curl http://localhost:8080/metrics
+
+# Test payment endpoint
+curl -X POST http://localhost:8080/api/v1/payment \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 100, "phone": "254700123456"}'
 ## Architecture Overview
 
 ```
@@ -374,9 +395,10 @@ docker build -t test-image .
 docker run -p 3000:3000 test-image
 
 # Test endpoints
-curl http://localhost:3000/live
-curl http://localhost:3000/health
-curl http://localhost:3000/metrics
+curl http://localhost:8080/
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+curl http://localhost:8080/metrics
 ```
 
 ### Load Testing
@@ -576,7 +598,7 @@ terraform plan -out=tfplan
 **Health check failing:**
 ```bash
 # Check database connectivity
-curl http://localhost:3000/health
+curl http://localhost:8080/health
 docker-compose logs postgres
 ```
 
@@ -588,7 +610,7 @@ docker stats healthcheck-app
 
 **Slow response times:**
 ```bash
-curl -w "@curl-format.txt" -o /dev/null -s http://localhost/metrics
+curl -w "@curl-format.txt" -o /dev/null -s http://localhost:8080/metrics
 # Check RDS performance insights
 # Monitor ECS CPU/Memory
 ```
@@ -606,7 +628,7 @@ curl -w "@curl-format.txt" -o /dev/null -s http://localhost/metrics
 ## Next Steps
 
 1. **Deploy locally** - `docker-compose up`
-2. **Test endpoints** - `curl http://localhost/health`
+2. **Test endpoints** - `curl http://localhost:8080/health`
 3. **Review Terraform** - Check `terraform/main.tf`
 4. **Deploy to AWS** - `terraform apply`
 5. **Configure GitHub Actions** - Set AWS credentials
